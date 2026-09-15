@@ -2,6 +2,9 @@ import customtkinter as ctk
 import keyboard
 
 from core.clicker import Clicker
+from core.points import PointsClicker
+from core.recorder import PointRecorder
+from core.overlay import Overlay
 from core import presets
 
 
@@ -13,10 +16,15 @@ class AutoToolApp(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title("Auto Tool")
-        self.geometry("660x640")
+        self.geometry("720x700")
         self.resizable(False, False)
+        self._center_window()
 
         self.clicker = Clicker()
+        self.points_clicker = PointsClicker(on_finish=self._on_points_finished)
+        self.recorder = PointRecorder(on_point=self._on_point_recorded)
+        self.overlay = Overlay(parent=self, on_close=self._on_overlay_closed)
+
         self.active_hotkeys: dict[str, str] = {}
         self.exit_hotkey = "f12"
 
@@ -30,37 +38,53 @@ class AutoToolApp(ctk.CTk):
         self.capture_hotkey_released = set()
 
         self.current_preset = None
+        self.recording_points = False
 
         self._build_ui()
         self._reload_hotkeys()
+        self._reload_presets_ui()
 
-    # ---------- UI ----------
+    def _center_window(self):
+        """Поставить окно по центру экрана."""
+        self.update_idletasks()
+        w = 720
+        h = 700
+        screen_w = self.winfo_screenwidth()
+        screen_h = self.winfo_screenheight()
+        x = (screen_w - w) // 2
+        y = (screen_h - h) // 2
+        self.geometry(f"{w}x{h}+{x}+{y}")
+
+    # ====================== UI ======================
     def _build_ui(self):
-        self.tabview = ctk.CTkTabview(self, width=620, height=520)
+        self.tabview = ctk.CTkTabview(self, width=680, height=560)
         self.tabview.pack(padx=20, pady=15)
 
-        self.tab_click = self.tabview.add("Кликер")
+        self.tab_click = self.tabview.add("Клик")
         self.tab_keys = self.tabview.add("Клавиши")
+        self.tab_points = self.tabview.add("Точки")
         self.tab_presets = self.tabview.add("Пресеты")
 
         self._build_click_tab()
         self._build_keys_tab()
+        self._build_points_tab()
         self._build_presets_tab()
 
         bottom = ctk.CTkFrame(self)
         bottom.pack(fill="x", padx=20, pady=(0, 15))
 
-        self.status_label = ctk.CTkLabel(bottom, text="Остановлено", text_color="#ff6b6b")
+        self.status_label = ctk.CTkLabel(bottom, text="Готово", text_color="#6bff8f")
         self.status_label.pack(side="left", padx=10)
 
         ctk.CTkButton(bottom, text="СТОП ВСЁ", command=self._stop_all,
                       fg_color="#c0392b", hover_color="#e74c3c").pack(side="right", padx=10)
 
-    def _make_hotkey_row(self, parent, default: str):
+    def _make_hotkey_row(self, parent, default: str = ""):
         row = ctk.CTkFrame(parent)
         row.pack(anchor="w", fill="x", pady=(0, 5))
         entry = ctk.CTkEntry(row, placeholder_text="напр. ctrl+alt+f9")
-        entry.insert(0, default)
+        if default:
+            entry.insert(0, default)
         entry.pack(side="left", fill="x", expand=True, padx=(0, 5))
         entry.bind("<Key>", lambda e: "break")
         btn = ctk.CTkButton(row, text="● Записать", width=110,
@@ -68,189 +92,297 @@ class AutoToolApp(ctk.CTk):
         btn.pack(side="right")
         return entry, btn
 
+    # ---------- вкладка КЛИК ----------
     def _build_click_tab(self):
         f = self.tab_click
 
-        ctk.CTkLabel(f, text="Кнопка мыши:").pack(anchor="w", pady=(10, 0))
+        row1 = ctk.CTkFrame(f)
+        row1.pack(fill="x", pady=(10, 0))
+        ctk.CTkLabel(row1, text="Кнопка:").pack(side="left")
         self.mouse_btn_var = ctk.StringVar(value="left")
-        ctk.CTkOptionMenu(f, values=["left", "right", "middle"],
-                          variable=self.mouse_btn_var).pack(anchor="w")
-
-        ctk.CTkLabel(f, text="Тип клика:").pack(anchor="w", pady=(10, 0))
+        ctk.CTkOptionMenu(row1, values=["left", "right", "middle"],
+                          variable=self.mouse_btn_var, width=100).pack(side="left", padx=5)
+        ctk.CTkLabel(row1, text="Тип:").pack(side="left", padx=(15, 0))
         self.click_type_var = ctk.StringVar(value="single")
-        ctk.CTkOptionMenu(f, values=["single", "double"],
-                          variable=self.click_type_var).pack(anchor="w")
+        ctk.CTkOptionMenu(row1, values=["single", "double"],
+                          variable=self.click_type_var, width=100).pack(side="left", padx=5)
 
         ctk.CTkLabel(f, text="Интервал (мс):").pack(anchor="w", pady=(10, 0))
         self.click_interval = ctk.CTkEntry(f)
-        self.click_interval.insert(0, "50")
-        self.click_interval.pack(anchor="w")
+        self.click_interval.insert(0, "500")
+        self.click_interval.pack(anchor="w", fill="x")
+        ctk.CTkLabel(f, text="⚠ меньше 40 мс — возможны баги",
+                     text_color="#c08400").pack(anchor="w")
 
         ctk.CTkLabel(f, text="Хоткей запуска:").pack(anchor="w", pady=(10, 0))
         self.click_hotkey, _ = self._make_hotkey_row(f, "ctrl+alt+f9")
 
-        ctk.CTkLabel(f, text="Имя пресета:").pack(anchor="w", pady=(10, 0))
-        self.click_preset_name = ctk.CTkEntry(f)
-        self.click_preset_name.pack(anchor="w", fill="x")
+        ctk.CTkLabel(f, text="Жми хоткей — запуск, ещё раз — стоп",
+                     text_color="#888").pack(anchor="w", pady=(10, 0))
 
-        ctk.CTkButton(f, text="💾 Сохранить пресет (Кликер)",
-                      command=self._save_click_preset).pack(anchor="w", pady=10)
-
+    # ---------- вкладка КЛАВИШИ ----------
     def _build_keys_tab(self):
         f = self.tab_keys
 
-        ctk.CTkLabel(f, text="Клавиши (запись):").pack(anchor="w", pady=(10, 0))
-        self.keys_display = ctk.CTkTextbox(f, height=60)
+        row = ctk.CTkFrame(f)
+        row.pack(anchor="w", fill="x", pady=(10, 5))
+        self.rec_btn = ctk.CTkButton(row, text="● Запись", command=self._start_key_capture,
+                                     fg_color="#27ae60", hover_color="#2ecc71", width=110)
+        self.rec_btn.pack(side="left", padx=5)
+        ctk.CTkButton(row, text="🗑 Очистить", command=self._clear_keys,
+                      fg_color="#c0392b", hover_color="#e74c3c", width=110).pack(side="left", padx=5)
+        ctk.CTkButton(row, text="▶ Тест", command=self._toggle_keys,
+                      fg_color="#3498db", hover_color="#2980b9", width=100).pack(side="left", padx=5)
+
+        self.keys_display = ctk.CTkTextbox(f, height=50)
         self.keys_display.pack(fill="x", pady=5)
         self.keys_display.configure(state="disabled")
 
-        row = ctk.CTkFrame(f)
-        row.pack(anchor="w", pady=5)
-        self.rec_btn = ctk.CTkButton(row, text="● Начать запись", command=self._start_key_capture,
-                                     fg_color="#27ae60", hover_color="#2ecc71")
-        self.rec_btn.pack(side="left", padx=5)
-        ctk.CTkButton(row, text="Очистить", command=self._clear_keys).pack(side="left", padx=5)
+        ctk.CTkLabel(f, text="Esc — стоп. Повторы разрешены (space × 3)",
+                     text_color="#888").pack(anchor="w")
 
         ctk.CTkLabel(f, text="Интервал (мс):").pack(anchor="w", pady=(10, 0))
         self.keys_interval = ctk.CTkEntry(f)
-        self.keys_interval.insert(0, "50")
-        self.keys_interval.pack(anchor="w")
+        self.keys_interval.insert(0, "500")
+        self.keys_interval.pack(anchor="w", fill="x")
+        ctk.CTkLabel(f, text="⚠ меньше 40 мс — возможны баги",
+                     text_color="#c08400").pack(anchor="w")
 
         ctk.CTkLabel(f, text="Хоткей запуска:").pack(anchor="w", pady=(10, 0))
         self.keys_hotkey, _ = self._make_hotkey_row(f, "ctrl+alt+f10")
 
+        # имя пресета + кнопка в одну строку
         ctk.CTkLabel(f, text="Имя пресета:").pack(anchor="w", pady=(10, 0))
-        self.keys_preset_name = ctk.CTkEntry(f)
-        self.keys_preset_name.pack(anchor="w", fill="x")
+        row_save = ctk.CTkFrame(f)
+        row_save.pack(anchor="w", fill="x", pady=(0, 5))
+        self.keys_preset_name = ctk.CTkEntry(row_save, height=36, placeholder_text="имя пресета")
+        self.keys_preset_name.pack(side="left", fill="x", expand=True, padx=(0, 5))
+        ctk.CTkButton(row_save, text="💾 Сохранить", command=self._save_keys_preset,
+                      height=36, width=140).pack(side="right")
 
-        ctk.CTkButton(f, text="💾 Сохранить пресет (Клавиши)",
-                      command=self._save_keys_preset).pack(anchor="w", pady=10)
+    # ---------- вкладка ТОЧКИ ----------
+    def _build_points_tab(self):
+        f = self.tab_points
 
+        row = ctk.CTkFrame(f)
+        row.pack(anchor="w", fill="x", pady=(10, 5))
+        self.points_rec_btn = ctk.CTkButton(
+            row, text="● Запись", command=self._toggle_point_record,
+            fg_color="#27ae60", hover_color="#2ecc71", width=110)
+        self.points_rec_btn.pack(side="left", padx=5)
+        ctk.CTkButton(row, text="▶ Тест", command=self._toggle_points,
+                      fg_color="#3498db", hover_color="#2980b9", width=110).pack(side="left", padx=5)
+        ctk.CTkButton(row, text="🗑 Очистить", command=self._clear_points,
+                      fg_color="#c0392b", hover_color="#e74c3c", width=110).pack(side="left", padx=5)
+
+        ctk.CTkLabel(f, text="Esc — стоп записи / кликов / оверлея",
+                     text_color="#888").pack(anchor="w", pady=(0, 5))
+
+        self.points_count_label = ctk.CTkLabel(f, text="Записано: 0 точек")
+        self.points_count_label.pack(anchor="w", pady=(5, 5))
+
+        self.points_list_frame = ctk.CTkScrollableFrame(f, height=70, label_text="Список точек")
+        self.points_list_frame.pack(fill="x", pady=5)
+
+        row1 = ctk.CTkFrame(f)
+        row1.pack(fill="x", pady=(10, 0))
+
+        ctk.CTkLabel(row1, text="Интервал:").pack(side="left")
+        self.points_interval = ctk.CTkEntry(row1, width=70)
+        self.points_interval.insert(0, "500")
+        self.points_interval.pack(side="left", padx=(5, 15))
+
+        ctk.CTkLabel(row1, text="Прогонов:").pack(side="left")
+        self.points_loops = ctk.CTkEntry(row1, width=70)
+        self.points_loops.insert(0, "1")
+        self.points_loops.pack(side="left", padx=(5, 15))
+
+        ctk.CTkLabel(row1, text="Кнопка:").pack(side="left")
+        self.points_mouse_var = ctk.StringVar(value="left")
+        ctk.CTkOptionMenu(row1, values=["left", "right", "middle"],
+                          variable=self.points_mouse_var, width=90).pack(side="left", padx=5)
+
+        ctk.CTkLabel(f, text="⚠ <40 мс — баги; >10 прогонов — баги",
+                     text_color="#c08400").pack(anchor="w", pady=(5, 0))
+
+        self.show_overlay_var = ctk.BooleanVar(value=True)
+        ctk.CTkCheckBox(f, text="Показывать оверлей",
+                        variable=self.show_overlay_var).pack(anchor="w", pady=(5, 0))
+
+        ctk.CTkLabel(f, text="Хоткей запуска:").pack(anchor="w", pady=(10, 0))
+        self.points_hotkey, _ = self._make_hotkey_row(f, "ctrl+alt+f11")
+
+        # имя пресета + кнопка в одну строку
+        ctk.CTkLabel(f, text="Имя пресета:").pack(anchor="w", pady=(10, 0))
+        row_save = ctk.CTkFrame(f)
+        row_save.pack(anchor="w", fill="x", pady=(0, 5))
+        self.points_preset_name = ctk.CTkEntry(row_save, height=36, placeholder_text="имя пресета")
+        self.points_preset_name.pack(side="left", fill="x", expand=True, padx=(0, 5))
+        ctk.CTkButton(row_save, text="💾 Сохранить", command=self._save_points_preset,
+                      height=36, width=140).pack(side="right")
+
+    # ---------- вкладка ПРЕСЕТЫ ----------
     def _build_presets_tab(self):
         f = self.tab_presets
 
-        ctk.CTkLabel(f, text="Сохранённые пресеты:").pack(anchor="w", pady=(10, 0))
-
-        self.presets_frame = ctk.CTkScrollableFrame(f, height=300)
+        self.presets_frame = ctk.CTkScrollableFrame(f, height=400)
         self.presets_frame.pack(fill="both", expand=True, pady=5)
 
-        ctk.CTkButton(f, text="🔄 Обновить список",
-                      command=self._reload_presets_ui).pack(anchor="w", pady=5)
+        ctk.CTkButton(f, text="🔄 Обновить", command=self._reload_presets_ui,
+                      height=32).pack(anchor="w", fill="x", pady=5)
 
-        ctk.CTkLabel(f, text="F12 — стоп всё и выход",
-                     text_color="#888").pack(anchor="w", pady=(5, 0))
+        ctk.CTkLabel(f, text="F12 — выход", text_color="#888").pack(anchor="w")
 
-    # ---------- пресеты UI ----------
-    def _reload_presets_ui(self):
-        for w in self.presets_frame.winfo_children():
+    # ====================== список точек ======================
+    def _refresh_points_list(self):
+        for w in self.points_list_frame.winfo_children():
             w.destroy()
 
-        names = presets.list_presets()
-        if not names:
-            ctk.CTkLabel(self.presets_frame, text="Пока нет пресетов").pack(anchor="w", pady=5)
+        pts = self.recorder.get_points()
+        self.points_count_label.configure(text=f"Записано: {len(pts)} точек")
+
+        if not pts:
+            ctk.CTkLabel(self.points_list_frame, text="(пусто)").pack(anchor="w", padx=5)
             return
 
-        for name in names:
-            try:
-                cfg = presets.load_preset(name)
-            except Exception:
-                continue
-            self._make_preset_row(name, cfg)
+        for i, (x, y) in enumerate(pts, start=1):
+            row = ctk.CTkFrame(self.points_list_frame)
+            row.pack(fill="x", pady=1, padx=2)
+            ctk.CTkLabel(row, text=f"{i}. ({x}, {y})", anchor="w").pack(side="left", padx=8)
+            ctk.CTkButton(row, text="✕", width=30, height=24,
+                          fg_color="#c0392b", hover_color="#e74c3c",
+                          command=lambda idx=i-1: self._remove_point(idx)).pack(side="right", padx=3)
 
-    def _make_preset_row(self, name: str, cfg: dict):
-        row = ctk.CTkFrame(self.presets_frame)
-        row.pack(fill="x", pady=3, padx=3)
+    def _remove_point(self, index: int):
+        pts = self.recorder.get_points()
+        if 0 <= index < len(pts):
+            pts.pop(index)
+            self.recorder.points = pts
+            self._refresh_points_list()
+            self.overlay.update(pts)
 
-        mode = cfg.get("mode", "click")
-        hk = cfg.get("hotkey", "—")
+    def _clear_points(self):
+        self.recorder.clear()
+        self._refresh_points_list()
+        self.overlay.update([])
 
-        info = f"[{mode}]  {name}  •  хоткей: {hk.upper()}"
-        ctk.CTkLabel(row, text=info, anchor="w").pack(side="left", padx=10, pady=5)
+    def _on_point_recorded(self, pt):
+        self.after(0, self._refresh_points_list)
+        self.after(0, lambda: self.overlay.update(self.recorder.get_points()))
 
-        ctk.CTkButton(row, text="▶", width=40,
-                      command=lambda: self._start_preset(name)).pack(side="right", padx=3, pady=3)
-        ctk.CTkButton(row, text="✎", width=40,
-                      command=lambda: self._load_to_editor(name, cfg)).pack(side="right", padx=3, pady=3)
-        ctk.CTkButton(row, text="🗑", width=40, fg_color="#c0392b", hover_color="#e74c3c",
-                      command=lambda: self._delete_preset(name)).pack(side="right", padx=3, pady=3)
+    def _on_points_finished(self):
+        self.after(0, self._hide_overlay_safe)
+        self.after(0, lambda: self._status("Прогоны завершены"))
 
-    def _load_to_editor(self, name: str, cfg: dict):
-        mode = cfg.get("mode", "click")
-        if mode == "click":
-            self.tabview.set("Кликер")
-            self.mouse_btn_var.set(cfg.get("mouse_button", "left"))
-            self.click_type_var.set(cfg.get("click_type", "single"))
-            self.click_interval.delete(0, "end")
-            self.click_interval.insert(0, str(cfg.get("interval_ms", 50)))
-            self.click_hotkey.delete(0, "end")
-            self.click_hotkey.insert(0, cfg.get("hotkey", ""))
-            self.click_preset_name.delete(0, "end")
-            self.click_preset_name.insert(0, name)
+    # ====================== запись точек ======================
+    def _toggle_point_record(self):
+        if self.recording_points:
+            self._stop_point_record()
         else:
-            self.tabview.set("Клавиши")
-            self.pressed_keys = list(cfg.get("keys", []))
-            self._refresh_keys_display()
-            self.keys_interval.delete(0, "end")
-            self.keys_interval.insert(0, str(cfg.get("interval_ms", 50)))
-            self.keys_hotkey.delete(0, "end")
-            self.keys_hotkey.insert(0, cfg.get("hotkey", ""))
-            self.keys_preset_name.delete(0, "end")
-            self.keys_preset_name.insert(0, name)
+            self._start_point_record()
 
-    def _delete_preset(self, name: str):
-        presets.delete_preset(name)
-        # если удалили запущенный — стоп
-        if self.current_preset == name:
+    def _start_point_record(self):
+        if self.recording_points:
+            return
+        self.recording_points = True
+        self.points_rec_btn.configure(text="■ Стоп", fg_color="#c0392b", hover_color="#e74c3c")
+        self._status("Запись... кликай, Esc — стоп")
+
+        self.update_idletasks()
+        x1 = self.winfo_rootx()
+        y1 = self.winfo_rooty()
+        x2 = x1 + self.winfo_width()
+        y2 = y1 + self.winfo_height()
+        self.recorder.set_ignore_rect(x1, y1, x2, y2)
+
+        self.overlay.show(self.recorder.get_points())
+        self.recorder.start()
+
+    def _stop_point_record(self):
+        if not self.recording_points:
+            return
+        self.recording_points = False
+        self.recorder.stop()
+        self.points_rec_btn.configure(text="● Запись", fg_color="#27ae60", hover_color="#2ecc71")
+        self._refresh_points_list()
+        self.overlay.hide()
+        self._status(f"Записано: {len(self.recorder.get_points())}")
+
+    # ====================== запуск без пресета ======================
+    def _toggle_click(self):
+        if self.clicker.running and self.current_preset == "__click__":
             self._stop_all()
-        self._reload_hotkeys()
-        self._reload_presets_ui()
-
-    # ---------- сохранение ----------
-    def _save_click_preset(self):
-        name = self.click_preset_name.get().strip()
-        if not name:
-            self._status("Впиши имя пресета!", error=True)
             return
-        hk = self.click_hotkey.get().strip().lower()
-        if not hk:
-            self._status("Запиши хоткей!", error=True)
-            return
-        cfg = {
+        try:
+            interval = int(self.click_interval.get() or "500")
+        except ValueError:
+            interval = 500
+        self.clicker.stop()
+        self.points_clicker.stop()
+        self.clicker.update_config({
             "mode": "click",
             "mouse_button": self.mouse_btn_var.get(),
             "click_type": self.click_type_var.get(),
-            "interval_ms": int(self.click_interval.get() or "50"),
-            "hotkey": hk,
-        }
-        presets.save_preset(name, cfg)
-        self._reload_hotkeys()
-        self._reload_presets_ui()
-        self._status(f"Сохранён: {name}")
+            "interval_ms": interval,
+        })
+        self.clicker.start()
+        self.current_preset = "__click__"
+        self._status("▶ Клик. Хоткей или Esc — стоп")
 
-    def _save_keys_preset(self):
-        name = self.keys_preset_name.get().strip()
-        if not name:
-            self._status("Впиши имя пресета!", error=True)
+    def _toggle_keys(self):
+        if self.clicker.running and self.current_preset == "__keys__":
+            self._stop_all()
             return
         if not self.pressed_keys:
             self._status("Сначала запиши клавиши!", error=True)
             return
-        hk = self.keys_hotkey.get().strip().lower()
-        if not hk:
-            self._status("Запиши хоткей!", error=True)
-            return
-        cfg = {
+        try:
+            interval = int(self.keys_interval.get() or "500")
+        except ValueError:
+            interval = 500
+        self.clicker.stop()
+        self.points_clicker.stop()
+        self.clicker.update_config({
             "mode": "keys",
             "keys": list(self.pressed_keys),
-            "interval_ms": int(self.keys_interval.get() or "50"),
-            "hotkey": hk,
-        }
-        presets.save_preset(name, cfg)
-        self._reload_hotkeys()
-        self._reload_presets_ui()
-        self._status(f"Сохранён: {name}")
+            "interval_ms": interval,
+        })
+        self.clicker.start()
+        self.current_preset = "__keys__"
+        self._status("▶ Клавиши. Хоткей или Esc — стоп")
 
-    # ---------- хоткеи ----------
+    def _toggle_points(self):
+        if self.points_clicker.running and self.current_preset == "__points__":
+            self._stop_all()
+            return
+        pts = self.recorder.get_points()
+        if not pts:
+            self._status("Сначала запиши точки!", error=True)
+            return
+        try:
+            interval = int(self.points_interval.get() or "500")
+        except ValueError:
+            interval = 500
+        try:
+            loops = int(self.points_loops.get() or "1")
+        except ValueError:
+            loops = 1
+        self.clicker.stop()
+        self.points_clicker.stop()
+        self.points_clicker.update(
+            points=pts,
+            interval_ms=interval,
+            mouse_button=self.points_mouse_var.get(),
+            loops=loops,
+        )
+        self.points_clicker.start()
+        if self.show_overlay_var.get():
+            self.overlay.show(pts)
+        self.current_preset = "__points__"
+        loops_text = "∞" if loops == 0 else str(loops)
+        self._status(f"▶ Точки × {loops_text}. Esc — стоп")
+
+    # ====================== хоткеи ======================
     def _reload_hotkeys(self):
         try:
             keyboard.unhook_all_hotkeys()
@@ -263,16 +395,20 @@ class AutoToolApp(ctk.CTk):
         except Exception as e:
             print("exit hotkey error:", e)
 
+        try:
+            keyboard.add_hotkey("esc", lambda: self.after(0, self._on_escape_pressed))
+        except Exception as e:
+            print("esc error:", e)
+
         for name in presets.list_presets():
             try:
                 cfg = presets.load_preset(name)
             except Exception:
                 continue
             hk = cfg.get("hotkey", "").strip().lower()
-            if not hk or hk == self.exit_hotkey:
+            if not hk or hk in (self.exit_hotkey, "esc"):
                 continue
             if hk in self.active_hotkeys:
-                print(f"конфликт хоткеев: {hk} — {name} пропущен")
                 continue
             try:
                 keyboard.add_hotkey(hk, lambda n=name: self.after(0, lambda: self._toggle_preset(n)))
@@ -280,10 +416,35 @@ class AutoToolApp(ctk.CTk):
             except Exception as e:
                 print(f"не смог повесить {hk}: {e}")
 
+        click_hk = self.click_hotkey.get().strip().lower()
+        if click_hk and click_hk not in (self.exit_hotkey, "esc") and click_hk not in self.active_hotkeys:
+            try:
+                keyboard.add_hotkey(click_hk, lambda: self.after(0, self._toggle_click))
+                self.active_hotkeys[click_hk] = "__click__"
+            except Exception as e:
+                print(f"click hotkey error: {e}")
+
+        keys_hk = self.keys_hotkey.get().strip().lower()
+        if keys_hk and keys_hk not in (self.exit_hotkey, "esc") and keys_hk not in self.active_hotkeys:
+            try:
+                keyboard.add_hotkey(keys_hk, lambda: self.after(0, self._toggle_keys))
+                self.active_hotkeys[keys_hk] = "__keys__"
+            except Exception as e:
+                print(f"keys hotkey error: {e}")
+
+        points_hk = self.points_hotkey.get().strip().lower()
+        if points_hk and points_hk not in (self.exit_hotkey, "esc") and points_hk not in self.active_hotkeys:
+            try:
+                keyboard.add_hotkey(points_hk, lambda: self.after(0, self._toggle_points))
+                self.active_hotkeys[points_hk] = "__points__"
+            except Exception as e:
+                print(f"points hotkey error: {e}")
+
     def _toggle_preset(self, name: str):
-        if self.clicker.running and self.current_preset == name:
-            self._stop_all()
-            return
+        if self.clicker.running or self.points_clicker.running:
+            if self.current_preset == name:
+                self._stop_all()
+                return
         self._start_preset(name)
 
     def _start_preset(self, name: str):
@@ -292,50 +453,112 @@ class AutoToolApp(ctk.CTk):
         except Exception as e:
             self._status(f"Ошибка: {e}", error=True)
             return
+
         self.clicker.stop()
-        self.clicker.update_config(cfg)
-        self.clicker.start()
+        self.points_clicker.stop()
+
+        mode = cfg.get("mode", "click")
+
+        if mode == "points":
+            self.points_clicker.update(
+                points=cfg.get("points", []),
+                interval_ms=cfg.get("interval_ms", 500),
+                mouse_button=cfg.get("mouse_button", "left"),
+                loops=cfg.get("loops", 1),
+            )
+            self.points_clicker.start()
+            if cfg.get("show_overlay", True):
+                self.overlay.show(cfg.get("points", []))
+        else:
+            self.clicker.update_config(cfg)
+            self.clicker.start()
+
         self.current_preset = name
         hk = cfg.get("hotkey", "").upper()
-        self._status(f"Работает: {name}  [{hk}]")
+        self._status(f"▶ {name}  [{hk}]")
 
     def _stop_all(self):
         self.clicker.stop()
+        self.points_clicker.stop()
         self.current_preset = None
+        try:
+            self.overlay.hide()
+        except Exception as e:
+            print("overlay hide error:", e)
         self._status("Остановлено")
 
+    def _on_escape_pressed(self):
+        if self.recording_points:
+            self._stop_point_record()
+            return
+        if self.capturing_keys:
+            self._stop_key_capture()
+            return
+        self.clicker.stop()
+        self.points_clicker.stop()
+        self.current_preset = None
+        self.after(30, self._hide_overlay_safe)
+        self._status("Остановлено (Esc)")
+
+    def _hide_overlay_safe(self):
+        try:
+            self.overlay.hide()
+        except Exception as e:
+            print("hide overlay error:", e)
+
     def _exit_app(self):
-        self._stop_all()
+        try:
+            self._stop_all()
+        except Exception:
+            pass
+        if self.recording_points:
+            try:
+                self._stop_point_record()
+            except Exception:
+                pass
+        try:
+            self.overlay.close()
+        except Exception:
+            pass
         try:
             keyboard.unhook_all()
         except Exception:
             pass
-        self.destroy()
+        try:
+            self.destroy()
+        except Exception:
+            pass
+        import os
+        os._exit(0)
 
     def _status(self, text: str, error: bool = False):
         color = "#ff6b6b" if error else "#6bff8f"
         self.status_label.configure(text=text, text_color=color)
 
-    # ---------- запись клавиш (для спама) ----------
+    def _on_overlay_closed(self):
+        pass
+
+    # ====================== запись клавиш ======================
     def _start_key_capture(self):
         if self.capturing_keys:
             return
         self.capturing_keys = True
         self.pressed_keys = []
         self._refresh_keys_display()
-        self.rec_btn.configure(text="■ Стоп записи", fg_color="#c0392b", hover_color="#e74c3c",
+        self.rec_btn.configure(text="■ Стоп", fg_color="#c0392b", hover_color="#e74c3c",
                                command=self._stop_key_capture)
-        self._status("Запись... жми клавиши, потом Стоп или Esc")
+        self._status("Запись клавиш... Esc — стоп")
 
         def on_event(e):
+            if not self.capturing_keys:
+                return False
             if e.event_type == "down":
                 name = e.name
                 if name == "esc":
                     self.after(0, self._stop_key_capture)
                     return
-                if name not in self.pressed_keys:
-                    self.pressed_keys.append(name)
-                    self.after(0, self._refresh_keys_display)
+                self.pressed_keys.append(name)
+                self.after(0, self._refresh_keys_display)
 
         self.capture_hook = keyboard.hook(on_event)
 
@@ -348,9 +571,9 @@ class AutoToolApp(ctk.CTk):
         except Exception:
             pass
         self.capture_hook = None
-        self.rec_btn.configure(text="● Начать запись", fg_color="#27ae60", hover_color="#2ecc71",
+        self.rec_btn.configure(text="● Запись", fg_color="#27ae60", hover_color="#2ecc71",
                                command=self._start_key_capture)
-        self._status("Запись остановлена")
+        self._status(f"Записано клавиш: {len(self.pressed_keys)}")
 
     def _refresh_keys_display(self):
         self.keys_display.configure(state="normal")
@@ -362,21 +585,20 @@ class AutoToolApp(ctk.CTk):
         self.pressed_keys = []
         self._refresh_keys_display()
 
-    # ---------- запись хоткея (комбо) ----------
+    # ====================== запись хоткея ======================
     def _start_hotkey_capture(self, entry: ctk.CTkEntry, btn: ctk.CTkButton):
         if self.capturing_hotkey is not None:
             return
         self.capturing_hotkey = entry
         self.capture_hotkey_pressed = []
         self.capture_hotkey_released = set()
-        btn.configure(text="● Жми комбо...", fg_color="#c0392b", hover_color="#e74c3c")
-        self._status("Жми комбо (напр. ctrl+alt+f9) и отпусти — запишется")
+        btn.configure(text="● Жми...", fg_color="#c0392b", hover_color="#e74c3c")
+        self._status("Жми комбо и отпусти")
 
         def on_event(e):
             name = self._normalize_key(e.name) if e.name else ""
             if not name:
                 return
-
             if e.event_type == "down":
                 if name == "esc":
                     self.after(0, self._cancel_hotkey_capture)
@@ -384,7 +606,6 @@ class AutoToolApp(ctk.CTk):
                 if name not in self.capture_hotkey_pressed:
                     self.capture_hotkey_pressed.append(name)
                 self.capture_hotkey_released.discard(name)
-
             elif e.event_type == "up":
                 self.capture_hotkey_released.add(name)
                 if self.capture_hotkey_pressed and all(
@@ -416,13 +637,12 @@ class AutoToolApp(ctk.CTk):
         except Exception:
             pass
         self.capture_hotkey_hook = None
-
         if self.capturing_hotkey is not None:
             self.capturing_hotkey.delete(0, "end")
             self.capturing_hotkey.insert(0, combo)
             self.capturing_hotkey = None
-
         self._reset_hotkey_buttons()
+        self._reload_hotkeys()
         self._status(f"Хоткей: {combo}")
 
     def _cancel_hotkey_capture(self):
@@ -433,12 +653,148 @@ class AutoToolApp(ctk.CTk):
         self.capture_hotkey_hook = None
         self.capturing_hotkey = None
         self._reset_hotkey_buttons()
-        self._status("Запись хоткея отменена", error=True)
+        self._status("Отменено", error=True)
 
     def _reset_hotkey_buttons(self):
-        for tab in (self.tab_click, self.tab_keys):
+        for tab in (self.tab_click, self.tab_keys, self.tab_points):
             for widget in tab.winfo_children():
                 if isinstance(widget, ctk.CTkFrame):
                     for child in widget.winfo_children():
-                        if isinstance(child, ctk.CTkButton) and "Жми комбо" in child.cget("text"):
+                        if isinstance(child, ctk.CTkButton) and "Жми" in child.cget("text"):
                             child.configure(text="● Записать", fg_color=("#3B8ED0", "#1F6AA5"))
+
+    # ====================== пресеты ======================
+    def _reload_presets_ui(self):
+        for w in self.presets_frame.winfo_children():
+            w.destroy()
+
+        names = presets.list_presets()
+        if not names:
+            ctk.CTkLabel(self.presets_frame, text="Пока нет пресетов").pack(anchor="w", pady=5)
+            return
+
+        for name in names:
+            try:
+                cfg = presets.load_preset(name)
+            except Exception:
+                continue
+            self._make_preset_row(name, cfg)
+
+    def _make_preset_row(self, name: str, cfg: dict):
+        row = ctk.CTkFrame(self.presets_frame)
+        row.pack(fill="x", pady=3, padx=3)
+
+        mode = cfg.get("mode", "click")
+        hk = cfg.get("hotkey", "—")
+        mode_label = {"click": "клик", "keys": "клавиши", "points": "точки"}.get(mode, mode)
+
+        if mode == "points":
+            extra = f" • {len(cfg.get('points', []))} точек"
+        else:
+            extra = ""
+
+        info = f"[{mode_label}]  {name}  •  {hk.upper()}{extra}"
+        ctk.CTkLabel(row, text=info, anchor="w").pack(side="left", padx=10, pady=5)
+
+        ctk.CTkButton(row, text="▶", width=40,
+                      command=lambda: self._start_preset(name)).pack(side="right", padx=3, pady=3)
+        ctk.CTkButton(row, text="✎", width=40,
+                      command=lambda: self._load_to_editor(name, cfg)).pack(side="right", padx=3, pady=3)
+        ctk.CTkButton(row, text="🗑", width=40, fg_color="#c0392b", hover_color="#e74c3c",
+                      command=lambda: self._delete_preset(name)).pack(side="right", padx=3, pady=3)
+
+    def _load_to_editor(self, name: str, cfg: dict):
+        mode = cfg.get("mode", "click")
+        if mode == "click":
+            self.tabview.set("Клик")
+            self.mouse_btn_var.set(cfg.get("mouse_button", "left"))
+            self.click_type_var.set(cfg.get("click_type", "single"))
+            self.click_interval.delete(0, "end")
+            self.click_interval.insert(0, str(cfg.get("interval_ms", 500)))
+            self.click_hotkey.delete(0, "end")
+            self.click_hotkey.insert(0, cfg.get("hotkey", ""))
+        elif mode == "keys":
+            self.tabview.set("Клавиши")
+            self.pressed_keys = list(cfg.get("keys", []))
+            self._refresh_keys_display()
+            self.keys_interval.delete(0, "end")
+            self.keys_interval.insert(0, str(cfg.get("interval_ms", 500)))
+            self.keys_hotkey.delete(0, "end")
+            self.keys_hotkey.insert(0, cfg.get("hotkey", ""))
+            self.keys_preset_name.delete(0, "end")
+            self.keys_preset_name.insert(0, name)
+        elif mode == "points":
+            self.tabview.set("Точки")
+            self.recorder.points = list(cfg.get("points", []))
+            self._refresh_points_list()
+            self.points_interval.delete(0, "end")
+            self.points_interval.insert(0, str(cfg.get("interval_ms", 500)))
+            self.points_loops.delete(0, "end")
+            self.points_loops.insert(0, str(cfg.get("loops", 1)))
+            self.points_mouse_var.set(cfg.get("mouse_button", "left"))
+            self.show_overlay_var.set(cfg.get("show_overlay", True))
+            self.points_hotkey.delete(0, "end")
+            self.points_hotkey.insert(0, cfg.get("hotkey", ""))
+            self.points_preset_name.delete(0, "end")
+            self.points_preset_name.insert(0, name)
+
+    def _delete_preset(self, name: str):
+        presets.delete_preset(name)
+        if self.current_preset == name:
+            self._stop_all()
+        self._reload_hotkeys()
+        self._reload_presets_ui()
+
+    def _save_keys_preset(self):
+        name = self.keys_preset_name.get().strip()
+        if not name:
+            self._status("Впиши имя пресета!", error=True)
+            return
+        if not self.pressed_keys:
+            self._status("Сначала запиши клавиши!", error=True)
+            return
+        hk = self.keys_hotkey.get().strip().lower()
+        if not hk:
+            self._status("Запиши хоткей!", error=True)
+            return
+        cfg = {
+            "mode": "keys",
+            "keys": list(self.pressed_keys),
+            "interval_ms": int(self.keys_interval.get() or "500"),
+            "hotkey": hk,
+        }
+        presets.save_preset(name, cfg)
+        self._reload_hotkeys()
+        self._reload_presets_ui()
+        self._status(f"Сохранён: {name}")
+
+    def _save_points_preset(self):
+        name = self.points_preset_name.get().strip()
+        if not name:
+            self._status("Впиши имя пресета!", error=True)
+            return
+        pts = self.recorder.get_points()
+        if not pts:
+            self._status("Сначала запиши точки!", error=True)
+            return
+        hk = self.points_hotkey.get().strip().lower()
+        if not hk:
+            self._status("Запиши хоткей!", error=True)
+            return
+        try:
+            loops = int(self.points_loops.get() or "1")
+        except ValueError:
+            loops = 1
+        cfg = {
+            "mode": "points",
+            "points": pts,
+            "interval_ms": int(self.points_interval.get() or "500"),
+            "mouse_button": self.points_mouse_var.get(),
+            "show_overlay": self.show_overlay_var.get(),
+            "loops": loops,
+            "hotkey": hk,
+        }
+        presets.save_preset(name, cfg)
+        self._reload_hotkeys()
+        self._reload_presets_ui()
+        self._status(f"Сохранён: {name} ({len(pts)} точек)")

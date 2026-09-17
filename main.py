@@ -1,8 +1,12 @@
 import threading
 import time
 import keyboard
+import os
+import sys
 from pynput.mouse import Button, Controller as MouseController
 from pynput.keyboard import Key, Controller as KeyController
+from ui.app import AutoToolApp
+from core import presets
 
 mouse = MouseController()
 kb = KeyController()
@@ -29,6 +33,34 @@ BUTTON_MAP = {
     "middle": Button.middle,
 }
 
+def resource_path(relative: str) -> str:
+    if getattr(sys, "frozen", False):
+        base = sys._MEIPASS
+    else:
+        base = os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(base, relative)
+
+
+if __name__ == "__main__":
+    presets.ensure_dir()
+    app = AutoToolApp()
+    try:
+        icon_path = resource_path("icon.ico")
+        if os.path.exists(icon_path):
+            app.iconbitmap(icon_path)
+    except Exception as e:
+        print("icon error:", e)
+
+    def on_close():
+        """Жёсткий выход при закрытии окна крестиком."""
+        try:
+            app._exit_app()
+        except Exception:
+            pass
+        os._exit(0)
+
+    app.protocol("WM_DELETE_WINDOW", on_close)
+    app.mainloop()
 
 def do_action():
     """Одно действие согласно конфигу."""

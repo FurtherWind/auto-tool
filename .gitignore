@@ -18,10 +18,14 @@ __pycache__/
 .vscode/
 *.swp
 
-# PyInstaller
+# Build artifacts
 build/
 dist/
 *.spec
+
+# Icon intermediate files
+icon_128.png
+icon_512.png
 
 # Личные настройки (пресеты)
 presets/*.json

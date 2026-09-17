@@ -12,15 +12,33 @@ ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
 
 
+def ms_to_display(ms: int):
+    """Переводит миллисекунды в удобную пару (значение, единица)."""
+    if ms % 60000 == 0 and ms >= 60000:
+        return (ms // 60000, "мин")
+    if ms % 1000 == 0 and ms >= 1000:
+        return (ms // 1000, "сек")
+    return (ms, "мс")
+
+
+def display_to_ms(value: float, unit: str) -> int:
+    """Обратно: (значение, единица) → миллисекунды."""
+    if unit == "сек":
+        return int(value * 1000)
+    if unit == "мин":
+        return int(value * 60000)
+    return int(value)
+
+
 class AutoToolApp(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title("Auto Tool")
-        self.geometry("720x700")
+        self.geometry("720x760")
         self.resizable(False, False)
         self._center_window()
 
-        self.clicker = Clicker()
+        self.clicker = Clicker(on_finish=self._on_clicker_finished)
         self.points_clicker = PointsClicker(on_finish=self._on_points_finished)
         self.recorder = PointRecorder(on_point=self._on_point_recorded)
         self.overlay = Overlay(parent=self, on_close=self._on_overlay_closed)
@@ -44,20 +62,21 @@ class AutoToolApp(ctk.CTk):
         self._reload_hotkeys()
         self._reload_presets_ui()
 
+        self.protocol("WM_DELETE_WINDOW", self._exit_app)
+        self._update_status_loop()
+
     def _center_window(self):
-        """Поставить окно по центру экрана."""
         self.update_idletasks()
-        w = 720
-        h = 700
-        screen_w = self.winfo_screenwidth()
-        screen_h = self.winfo_screenheight()
-        x = (screen_w - w) // 2
-        y = (screen_h - h) // 2
+        w, h = 720, 760
+        sw = self.winfo_screenwidth()
+        sh = self.winfo_screenheight()
+        x = (sw - w) // 2
+        y = (sh - h) // 2
         self.geometry(f"{w}x{h}+{x}+{y}")
 
     # ====================== UI ======================
     def _build_ui(self):
-        self.tabview = ctk.CTkTabview(self, width=680, height=560)
+        self.tabview = ctk.CTkTabview(self, width=680, height=620)
         self.tabview.pack(padx=20, pady=15)
 
         self.tab_click = self.tabview.add("Клик")
@@ -76,8 +95,62 @@ class AutoToolApp(ctk.CTk):
         self.status_label = ctk.CTkLabel(bottom, text="Готово", text_color="#6bff8f")
         self.status_label.pack(side="left", padx=10)
 
+        self.pause_btn = ctk.CTkButton(bottom, text="⏸ Пауза", width=110,
+                                       command=self._toggle_pause,
+                                       fg_color="#e67e22", hover_color="#d35400")
+        self.pause_btn.pack(side="right", padx=5)
+
         ctk.CTkButton(bottom, text="СТОП ВСЁ", command=self._stop_all,
-                      fg_color="#c0392b", hover_color="#e74c3c").pack(side="right", padx=10)
+                      fg_color="#c0392b", hover_color="#e74c3c").pack(side="right", padx=5)
+
+    def _make_interval_row(self, parent, default_ms: int = 500):
+        """Строка: [значение] [единица]  ± [разброс] [единица]
+        Возвращает (entry_val, unit_val, entry_dev, unit_dev)."""
+        row = ctk.CTkFrame(parent)
+        row.pack(fill="x", pady=(0, 5))
+
+        val, unit = ms_to_display(default_ms)
+
+        e_val = ctk.CTkEntry(row, width=60)
+        e_val.insert(0, str(val))
+        e_val.pack(side="left", padx=(0, 3))
+
+        u_val = ctk.CTkOptionMenu(row, values=["мс", "сек", "мин"], width=70)
+        u_val.set(unit)
+        u_val.pack(side="left", padx=(0, 15))
+
+        ctk.CTkLabel(row, text="±").pack(side="left", padx=(0, 3))
+
+        e_dev = ctk.CTkEntry(row, width=60)
+        e_dev.insert(0, "0")
+        e_dev.pack(side="left", padx=(0, 3))
+
+        u_dev = ctk.CTkOptionMenu(row, values=["мс", "сек"], width=70)
+        u_dev.set("мс")
+        u_dev.pack(side="left")
+
+        return e_val, u_val, e_dev, u_dev
+
+    def _get_interval_ms(self, e_val, u_val, e_dev, u_dev):
+        """Возвращает (min_ms, max_ms) из значения и разброса."""
+        try:
+            v = float(e_val.get() or "500")
+        except ValueError:
+            v = 500
+        try:
+            d = float(e_dev.get() or "0")
+        except ValueError:
+            d = 0
+
+        base_ms = display_to_ms(v, u_val.get())
+        dev_ms = display_to_ms(d, u_dev.get())
+
+        if dev_ms < 0:
+            dev_ms = 0
+
+        min_ms = max(1, base_ms - dev_ms)
+        max_ms = base_ms + dev_ms
+        return min_ms, max_ms
 
     def _make_hotkey_row(self, parent, default: str = ""):
         row = ctk.CTkFrame(parent)
@@ -107,12 +180,15 @@ class AutoToolApp(ctk.CTk):
         ctk.CTkOptionMenu(row1, values=["single", "double"],
                           variable=self.click_type_var, width=100).pack(side="left", padx=5)
 
-        ctk.CTkLabel(f, text="Интервал (мс):").pack(anchor="w", pady=(10, 0))
-        self.click_interval = ctk.CTkEntry(f)
-        self.click_interval.insert(0, "500")
-        self.click_interval.pack(anchor="w", fill="x")
+        ctk.CTkLabel(f, text="Интервал:").pack(anchor="w", pady=(10, 0))
+        self.click_iv = self._make_interval_row(f, 500)
         ctk.CTkLabel(f, text="⚠ меньше 40 мс — возможны баги",
                      text_color="#c08400").pack(anchor="w")
+
+        ctk.CTkLabel(f, text="Количество кликов (0 = ∞):").pack(anchor="w", pady=(10, 0))
+        self.click_max = ctk.CTkEntry(f)
+        self.click_max.insert(0, "0")
+        self.click_max.pack(anchor="w", fill="x")
 
         ctk.CTkLabel(f, text="Хоткей запуска:").pack(anchor="w", pady=(10, 0))
         self.click_hotkey, _ = self._make_hotkey_row(f, "ctrl+alt+f9")
@@ -134,24 +210,26 @@ class AutoToolApp(ctk.CTk):
         ctk.CTkButton(row, text="▶ Тест", command=self._toggle_keys,
                       fg_color="#3498db", hover_color="#2980b9", width=100).pack(side="left", padx=5)
 
-        self.keys_display = ctk.CTkTextbox(f, height=50)
+        self.keys_display = ctk.CTkTextbox(f, height=40)
         self.keys_display.pack(fill="x", pady=5)
         self.keys_display.configure(state="disabled")
 
-        ctk.CTkLabel(f, text="Esc — стоп. Повторы разрешены (space × 3)",
+        ctk.CTkLabel(f, text="Esc — стоп. Повторы разрешены",
                      text_color="#888").pack(anchor="w")
 
-        ctk.CTkLabel(f, text="Интервал (мс):").pack(anchor="w", pady=(10, 0))
-        self.keys_interval = ctk.CTkEntry(f)
-        self.keys_interval.insert(0, "500")
-        self.keys_interval.pack(anchor="w", fill="x")
+        ctk.CTkLabel(f, text="Интервал:").pack(anchor="w", pady=(10, 0))
+        self.keys_iv = self._make_interval_row(f, 500)
         ctk.CTkLabel(f, text="⚠ меньше 40 мс — возможны баги",
                      text_color="#c08400").pack(anchor="w")
+
+        ctk.CTkLabel(f, text="Количество повторов (0 = ∞):").pack(anchor="w", pady=(10, 0))
+        self.keys_max = ctk.CTkEntry(f)
+        self.keys_max.insert(0, "0")
+        self.keys_max.pack(anchor="w", fill="x")
 
         ctk.CTkLabel(f, text="Хоткей запуска:").pack(anchor="w", pady=(10, 0))
         self.keys_hotkey, _ = self._make_hotkey_row(f, "ctrl+alt+f10")
 
-        # имя пресета + кнопка в одну строку
         ctk.CTkLabel(f, text="Имя пресета:").pack(anchor="w", pady=(10, 0))
         row_save = ctk.CTkFrame(f)
         row_save.pack(anchor="w", fill="x", pady=(0, 5))
@@ -175,44 +253,44 @@ class AutoToolApp(ctk.CTk):
         ctk.CTkButton(row, text="🗑 Очистить", command=self._clear_points,
                       fg_color="#c0392b", hover_color="#e74c3c", width=110).pack(side="left", padx=5)
 
-        ctk.CTkLabel(f, text="Esc — стоп записи / кликов / оверлея",
-                     text_color="#888").pack(anchor="w", pady=(0, 5))
+        ctk.CTkLabel(f, text="Esc — стоп", text_color="#888").pack(anchor="w", pady=(0, 5))
 
         self.points_count_label = ctk.CTkLabel(f, text="Записано: 0 точек")
         self.points_count_label.pack(anchor="w", pady=(5, 5))
 
-        self.points_list_frame = ctk.CTkScrollableFrame(f, height=70, label_text="Список точек")
+        self.points_list_frame = ctk.CTkScrollableFrame(f, height=40, label_text="Список точек")
         self.points_list_frame.pack(fill="x", pady=5)
 
         row1 = ctk.CTkFrame(f)
         row1.pack(fill="x", pady=(10, 0))
-
         ctk.CTkLabel(row1, text="Интервал:").pack(side="left")
-        self.points_interval = ctk.CTkEntry(row1, width=70)
-        self.points_interval.insert(0, "500")
-        self.points_interval.pack(side="left", padx=(5, 15))
+        self.points_iv = self._make_interval_row(row1, 500)
 
-        ctk.CTkLabel(row1, text="Прогонов:").pack(side="left")
-        self.points_loops = ctk.CTkEntry(row1, width=70)
+        row2 = ctk.CTkFrame(f)
+        row2.pack(fill="x", pady=(5, 0))
+        ctk.CTkLabel(row2, text="Прогонов:").pack(side="left")
+        self.points_loops = ctk.CTkEntry(row2, width=70)
         self.points_loops.insert(0, "1")
         self.points_loops.pack(side="left", padx=(5, 15))
-
-        ctk.CTkLabel(row1, text="Кнопка:").pack(side="left")
+        ctk.CTkLabel(row2, text="Кнопка:").pack(side="left")
         self.points_mouse_var = ctk.StringVar(value="left")
-        ctk.CTkOptionMenu(row1, values=["left", "right", "middle"],
+        ctk.CTkOptionMenu(row2, values=["left", "right", "middle"],
                           variable=self.points_mouse_var, width=90).pack(side="left", padx=5)
 
-        ctk.CTkLabel(f, text="⚠ <40 мс — баги; >10 прогонов — баги",
-                     text_color="#c08400").pack(anchor="w", pady=(5, 0))
+        self.smooth_var = ctk.BooleanVar(value=True)
+        ctk.CTkCheckBox(f, text="Плавное перемещение курсора",
+                        variable=self.smooth_var).pack(anchor="w", pady=(5, 0))
 
         self.show_overlay_var = ctk.BooleanVar(value=True)
         ctk.CTkCheckBox(f, text="Показывать оверлей",
                         variable=self.show_overlay_var).pack(anchor="w", pady=(5, 0))
 
+        ctk.CTkLabel(f, text="⚠ <40 мс — баги; >10 прогонов — баги",
+                     text_color="#c08400").pack(anchor="w", pady=(5, 0))
+
         ctk.CTkLabel(f, text="Хоткей запуска:").pack(anchor="w", pady=(10, 0))
         self.points_hotkey, _ = self._make_hotkey_row(f, "ctrl+alt+f11")
 
-        # имя пресета + кнопка в одну строку
         ctk.CTkLabel(f, text="Имя пресета:").pack(anchor="w", pady=(10, 0))
         row_save = ctk.CTkFrame(f)
         row_save.pack(anchor="w", fill="x", pady=(0, 5))
@@ -232,6 +310,41 @@ class AutoToolApp(ctk.CTk):
                       height=32).pack(anchor="w", fill="x", pady=5)
 
         ctk.CTkLabel(f, text="F12 — выход", text_color="#888").pack(anchor="w")
+
+    # ====================== статус ======================
+    def _update_status_loop(self):
+        """Каждые 500мс обновляем счётчик в статусе."""
+        try:
+            if self.clicker.running:
+                c = self.clicker.counter
+                max_c = self.clicker.config.get("max_count", 0)
+                suffix = f" ({c}/{max_c})" if max_c > 0 else f" ({c})"
+                if self.clicker.paused:
+                    self.status_label.configure(text=f"⏸ Пауза{suffix}",
+                                                text_color="#e67e22")
+                else:
+                    self.status_label.configure(text=f"▶ Работает{suffix}",
+                                                text_color="#6bff8f")
+            elif self.points_clicker.running:
+                c = self.points_clicker.counter
+                loops = self.points_clicker.loops
+                suffix = f" ({c}/{loops})" if loops > 0 else f" ({c}/∞)"
+                if self.points_clicker.paused:
+                    self.status_label.configure(text=f"⏸ Пауза{suffix}",
+                                                text_color="#e67e22")
+                else:
+                    self.status_label.configure(text=f"▶ Точки{suffix}",
+                                                text_color="#6bff8f")
+        except Exception:
+            pass
+        self.after(500, self._update_status_loop)
+
+    def _on_clicker_finished(self):
+        self.after(0, lambda: self._status("✓ Пресет завершён"))
+
+    def _on_points_finished(self):
+        self.after(0, self._hide_overlay_safe)
+        self.after(0, lambda: self._status("✓ Прогоны завершены"))
 
     # ====================== список точек ======================
     def _refresh_points_list(self):
@@ -270,10 +383,6 @@ class AutoToolApp(ctk.CTk):
         self.after(0, self._refresh_points_list)
         self.after(0, lambda: self.overlay.update(self.recorder.get_points()))
 
-    def _on_points_finished(self):
-        self.after(0, self._hide_overlay_safe)
-        self.after(0, lambda: self._status("Прогоны завершены"))
-
     # ====================== запись точек ======================
     def _toggle_point_record(self):
         if self.recording_points:
@@ -308,26 +417,30 @@ class AutoToolApp(ctk.CTk):
         self.overlay.hide()
         self._status(f"Записано: {len(self.recorder.get_points())}")
 
-    # ====================== запуск без пресета ======================
+    # ====================== запуск ======================
     def _toggle_click(self):
         if self.clicker.running and self.current_preset == "__click__":
             self._stop_all()
             return
+        min_ms, max_ms = self._get_interval_ms(*self.click_iv)
         try:
-            interval = int(self.click_interval.get() or "500")
+            max_c = int(self.click_max.get() or "0")
         except ValueError:
-            interval = 500
+            max_c = 0
+
         self.clicker.stop()
         self.points_clicker.stop()
         self.clicker.update_config({
             "mode": "click",
             "mouse_button": self.mouse_btn_var.get(),
             "click_type": self.click_type_var.get(),
-            "interval_ms": interval,
+            "interval_min": min_ms,
+            "interval_max": max_ms,
+            "max_count": max_c,
         })
         self.clicker.start()
         self.current_preset = "__click__"
-        self._status("▶ Клик. Хоткей или Esc — стоп")
+        self._update_pause_button()
 
     def _toggle_keys(self):
         if self.clicker.running and self.current_preset == "__keys__":
@@ -336,20 +449,24 @@ class AutoToolApp(ctk.CTk):
         if not self.pressed_keys:
             self._status("Сначала запиши клавиши!", error=True)
             return
+        min_ms, max_ms = self._get_interval_ms(*self.keys_iv)
         try:
-            interval = int(self.keys_interval.get() or "500")
+            max_c = int(self.keys_max.get() or "0")
         except ValueError:
-            interval = 500
+            max_c = 0
+
         self.clicker.stop()
         self.points_clicker.stop()
         self.clicker.update_config({
             "mode": "keys",
             "keys": list(self.pressed_keys),
-            "interval_ms": interval,
+            "interval_min": min_ms,
+            "interval_max": max_ms,
+            "max_count": max_c,
         })
         self.clicker.start()
         self.current_preset = "__keys__"
-        self._status("▶ Клавиши. Хоткей или Esc — стоп")
+        self._update_pause_button()
 
     def _toggle_points(self):
         if self.points_clicker.running and self.current_preset == "__points__":
@@ -359,28 +476,52 @@ class AutoToolApp(ctk.CTk):
         if not pts:
             self._status("Сначала запиши точки!", error=True)
             return
-        try:
-            interval = int(self.points_interval.get() or "500")
-        except ValueError:
-            interval = 500
+        min_ms, max_ms = self._get_interval_ms(*self.points_iv)
         try:
             loops = int(self.points_loops.get() or "1")
         except ValueError:
             loops = 1
+
         self.clicker.stop()
         self.points_clicker.stop()
         self.points_clicker.update(
             points=pts,
-            interval_ms=interval,
+            interval_min=min_ms,
+            interval_max=max_ms,
             mouse_button=self.points_mouse_var.get(),
             loops=loops,
+            smooth=self.smooth_var.get(),
         )
         self.points_clicker.start()
         if self.show_overlay_var.get():
             self.overlay.show(pts)
         self.current_preset = "__points__"
-        loops_text = "∞" if loops == 0 else str(loops)
-        self._status(f"▶ Точки × {loops_text}. Esc — стоп")
+        self._update_pause_button()
+
+    def _toggle_pause(self):
+        if self.clicker.running:
+            self.clicker.toggle_pause()
+            self._update_pause_button()
+        elif self.points_clicker.running:
+            self.points_clicker.toggle_pause()
+            self._update_pause_button()
+        else:
+            self._status("Ничего не запущено", error=True)
+
+    def _update_pause_button(self):
+        """Меняет текст кнопки паузы в зависимости от состояния."""
+        paused = False
+        if self.clicker.running:
+            paused = self.clicker.paused
+        elif self.points_clicker.running:
+            paused = self.points_clicker.paused
+
+        if paused:
+            self.pause_btn.configure(text="▶ Продолжить",
+                                     fg_color="#27ae60", hover_color="#2ecc71")
+        else:
+            self.pause_btn.configure(text="⏸ Пауза",
+                                     fg_color="#e67e22", hover_color="#d35400")
 
     # ====================== хоткеи ======================
     def _reload_hotkeys(self):
@@ -462,9 +603,11 @@ class AutoToolApp(ctk.CTk):
         if mode == "points":
             self.points_clicker.update(
                 points=cfg.get("points", []),
-                interval_ms=cfg.get("interval_ms", 500),
+                interval_min=cfg.get("interval_min", 500),
+                interval_max=cfg.get("interval_max", 500),
                 mouse_button=cfg.get("mouse_button", "left"),
                 loops=cfg.get("loops", 1),
+                smooth=cfg.get("smooth", True),
             )
             self.points_clicker.start()
             if cfg.get("show_overlay", True):
@@ -481,10 +624,11 @@ class AutoToolApp(ctk.CTk):
         self.clicker.stop()
         self.points_clicker.stop()
         self.current_preset = None
+        self._update_pause_button()
         try:
             self.overlay.hide()
-        except Exception as e:
-            print("overlay hide error:", e)
+        except Exception:
+            pass
         self._status("Остановлено")
 
     def _on_escape_pressed(self):
@@ -503,25 +647,37 @@ class AutoToolApp(ctk.CTk):
     def _hide_overlay_safe(self):
         try:
             self.overlay.hide()
-        except Exception as e:
-            print("hide overlay error:", e)
+        except Exception:
+            pass
 
     def _exit_app(self):
         try:
-            self._stop_all()
+            self.clicker.stop()
+        except Exception:
+            pass
+        try:
+            self.points_clicker.stop()
         except Exception:
             pass
         if self.recording_points:
             try:
-                self._stop_point_record()
+                self.recorder.stop()
             except Exception:
                 pass
+        try:
+            keyboard.unhook_all_hotkeys()
+        except Exception:
+            pass
+        try:
+            keyboard.unhook_all()
+        except Exception:
+            pass
         try:
             self.overlay.close()
         except Exception:
             pass
         try:
-            keyboard.unhook_all()
+            self.quit()
         except Exception:
             pass
         try:
@@ -709,16 +865,18 @@ class AutoToolApp(ctk.CTk):
             self.tabview.set("Клик")
             self.mouse_btn_var.set(cfg.get("mouse_button", "left"))
             self.click_type_var.set(cfg.get("click_type", "single"))
-            self.click_interval.delete(0, "end")
-            self.click_interval.insert(0, str(cfg.get("interval_ms", 500)))
+            self._set_interval(self.click_iv, cfg.get("interval_min", 500), cfg.get("interval_max", 500))
+            self.click_max.delete(0, "end")
+            self.click_max.insert(0, str(cfg.get("max_count", 0)))
             self.click_hotkey.delete(0, "end")
             self.click_hotkey.insert(0, cfg.get("hotkey", ""))
         elif mode == "keys":
             self.tabview.set("Клавиши")
             self.pressed_keys = list(cfg.get("keys", []))
             self._refresh_keys_display()
-            self.keys_interval.delete(0, "end")
-            self.keys_interval.insert(0, str(cfg.get("interval_ms", 500)))
+            self._set_interval(self.keys_iv, cfg.get("interval_min", 500), cfg.get("interval_max", 500))
+            self.keys_max.delete(0, "end")
+            self.keys_max.insert(0, str(cfg.get("max_count", 0)))
             self.keys_hotkey.delete(0, "end")
             self.keys_hotkey.insert(0, cfg.get("hotkey", ""))
             self.keys_preset_name.delete(0, "end")
@@ -727,16 +885,34 @@ class AutoToolApp(ctk.CTk):
             self.tabview.set("Точки")
             self.recorder.points = list(cfg.get("points", []))
             self._refresh_points_list()
-            self.points_interval.delete(0, "end")
-            self.points_interval.insert(0, str(cfg.get("interval_ms", 500)))
+            self._set_interval(self.points_iv, cfg.get("interval_min", 500), cfg.get("interval_max", 500))
             self.points_loops.delete(0, "end")
             self.points_loops.insert(0, str(cfg.get("loops", 1)))
             self.points_mouse_var.set(cfg.get("mouse_button", "left"))
+            self.smooth_var.set(cfg.get("smooth", True))
             self.show_overlay_var.set(cfg.get("show_overlay", True))
             self.points_hotkey.delete(0, "end")
             self.points_hotkey.insert(0, cfg.get("hotkey", ""))
             self.points_preset_name.delete(0, "end")
             self.points_preset_name.insert(0, name)
+
+    def _set_interval(self, iv, min_ms, max_ms):
+        """Ставит значение и разброс в поля интервала."""
+        e_val, u_val, e_dev, u_dev = iv
+
+        # base = среднее между min и max
+        base_ms = (min_ms + max_ms) // 2
+        dev_ms = max_ms - base_ms
+
+        # base в удобных единицах
+        v, u = ms_to_display(base_ms)
+        e_val.delete(0, "end"); e_val.insert(0, str(v)); u_val.set(u)
+
+        # разброс всегда в мс (или сек если большой)
+        if dev_ms >= 1000 and dev_ms % 1000 == 0:
+            e_dev.delete(0, "end"); e_dev.insert(0, str(dev_ms // 1000)); u_dev.set("сек")
+        else:
+            e_dev.delete(0, "end"); e_dev.insert(0, str(dev_ms)); u_dev.set("мс")
 
     def _delete_preset(self, name: str):
         presets.delete_preset(name)
@@ -757,10 +933,17 @@ class AutoToolApp(ctk.CTk):
         if not hk:
             self._status("Запиши хоткей!", error=True)
             return
+        min_ms, max_ms = self._get_interval_ms(*self.keys_iv)
+        try:
+            max_c = int(self.keys_max.get() or "0")
+        except ValueError:
+            max_c = 0
         cfg = {
             "mode": "keys",
             "keys": list(self.pressed_keys),
-            "interval_ms": int(self.keys_interval.get() or "500"),
+            "interval_min": min_ms,
+            "interval_max": max_ms,
+            "max_count": max_c,
             "hotkey": hk,
         }
         presets.save_preset(name, cfg)
@@ -781,6 +964,7 @@ class AutoToolApp(ctk.CTk):
         if not hk:
             self._status("Запиши хоткей!", error=True)
             return
+        min_ms, max_ms = self._get_interval_ms(*self.points_iv)
         try:
             loops = int(self.points_loops.get() or "1")
         except ValueError:
@@ -788,9 +972,11 @@ class AutoToolApp(ctk.CTk):
         cfg = {
             "mode": "points",
             "points": pts,
-            "interval_ms": int(self.points_interval.get() or "500"),
+            "interval_min": min_ms,
+            "interval_max": max_ms,
             "mouse_button": self.points_mouse_var.get(),
             "show_overlay": self.show_overlay_var.get(),
+            "smooth": self.smooth_var.get(),
             "loops": loops,
             "hotkey": hk,
         }

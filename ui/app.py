@@ -61,8 +61,9 @@ class AutoToolApp(ctk.CTk):
         self._build_ui()
         self._reload_hotkeys()
         self._reload_presets_ui()
+        self.tray = None
 
-        self.protocol("WM_DELETE_WINDOW", self._exit_app)
+        self.protocol("WM_DELETE_WINDOW", self._hide_to_tray)
         self._update_status_loop()
 
     def _center_window(self):
@@ -650,7 +651,42 @@ class AutoToolApp(ctk.CTk):
         except Exception:
             pass
 
+    def _hide_to_tray(self):
+        """Скрыть окно (программа продолжает работать в фоне)."""
+        self.withdraw()
+
+    def _show_from_tray(self):
+        """Показать окно из трея."""
+        self.after(0, self._do_show_from_tray)
+
+    def _do_show_from_tray(self):
+        try:
+            self.deiconify()
+            self.lift()
+            self.focus_force()
+        except Exception as e:
+            print("show from tray error:", e)
+
+    def _stop_from_tray(self):
+        """Обработчик 'Стоп всё' из трея."""
+        self.after(0, self._stop_all)
+
+    def _exit_from_tray(self):
+        """Обработчик 'Выход' из трея."""
+        self.after(0, self._exit_app)
+
     def _exit_app(self):
+         # останавливаем трей
+        try:
+            if self.tray:
+                self.tray.stop()
+        except Exception:
+            pass
+
+        try:
+            self.clicker.stop()
+        except Exception:
+            pass
         try:
             self.clicker.stop()
         except Exception:

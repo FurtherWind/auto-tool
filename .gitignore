@@ -30,6 +30,9 @@ icon_512.png
 # Личные настройки (пресеты)
 presets/*.json
 
+# Настройки приложения
+settings.json
+
 # ОС
 .DS_Store
 Thumbs.db

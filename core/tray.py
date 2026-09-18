@@ -4,18 +4,13 @@ from PIL import Image
 
 
 class TrayIcon:
-    """Иконка в системном трее с меню:
-    Развернуть / Стоп всё / Выход."""
+    """Иконка в трее с меню. Поддерживает смену картинки (серая/зелёная)."""
 
-    def __init__(self, icon_path: str, on_show=None, on_stop=None, on_exit=None,
+    def __init__(self, icon_idle_path: str, icon_active_path: str = None,
+                 on_show=None, on_stop=None, on_exit=None,
                  title: str = "Auto Tool"):
-        """
-        icon_path — путь к .ico или .png
-        on_show   — показать главное окно
-        on_stop   — стоп всё
-        on_exit   — выход из программы
-        """
-        self.icon_path = icon_path
+        self.icon_idle_path = icon_idle_path
+        self.icon_active_path = icon_active_path or icon_idle_path
         self.on_show = on_show
         self.on_stop = on_stop
         self.on_exit = on_exit
@@ -23,6 +18,9 @@ class TrayIcon:
         self.icon = None
         self.thread = None
         self._running = False
+        self._active = False   # сейчас активно?
+        self._img_idle = None
+        self._img_active = None
 
     def _build_menu(self):
         return pystray.Menu(
@@ -58,12 +56,24 @@ class TrayIcon:
             except Exception as e:
                 print("tray exit error:", e)
 
+    def _load_images(self):
+        try:
+            self._img_idle = Image.open(self.icon_idle_path)
+        except Exception as e:
+            print("tray idle img error:", e)
+            self._img_idle = Image.new("RGBA", (64, 64), (128, 128, 128, 255))
+        try:
+            self._img_active = Image.open(self.icon_active_path)
+        except Exception as e:
+            print("tray active img error:", e)
+            self._img_active = self._img_idle
+
     def _run(self):
         try:
-            img = Image.open(self.icon_path)
+            self._load_images()
             self.icon = pystray.Icon(
                 "auto_tool",
-                icon=img,
+                icon=self._img_idle,
                 title=self.title,
                 menu=self._build_menu(),
             )
@@ -74,14 +84,12 @@ class TrayIcon:
             self._running = False
 
     def start(self):
-        """Запустить трей в отдельном потоке."""
         if self._running:
             return
         self.thread = threading.Thread(target=self._run, daemon=True)
         self.thread.start()
 
     def stop(self):
-        """Остановить трей."""
         if self.icon is not None:
             try:
                 self.icon.stop()
@@ -89,11 +97,14 @@ class TrayIcon:
                 pass
         self._running = False
 
-    def notify(self, message: str, title: str = "Auto Tool"):
-        """Показать уведомление из трея (Windows 10+)."""
+    def set_active(self, active: bool):
+        """Сменить иконку: активна (зелёная) / неактивна (серая)."""
         if self.icon is None:
             return
+        if active == self._active:
+            return
+        self._active = active
         try:
-            self.icon.notify(message, title)
-        except Exception:
-            pass
+            self.icon.icon = self._img_active if active else self._img_idle
+        except Exception as e:
+            print("tray set_active error:", e)

@@ -1,15 +1,28 @@
+import os
+import sys
 import customtkinter as ctk
 import keyboard
 
+from CTkToolTip import CTkToolTip
 from core.clicker import Clicker
 from core.points import PointsClicker
 from core.recorder import PointRecorder
 from core.overlay import Overlay
 from core import presets
+from core import settings
+from core.settings_window import SettingsWindow
 
 
-ctk.set_appearance_mode("dark")
+def _resource_path(relative: str) -> str:
+    if getattr(sys, "frozen", False):
+        base = sys._MEIPASS
+    else:
+        base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(base, relative)
+
+
 ctk.set_default_color_theme("blue")
+# тема ставится ниже, после загрузки settings
 
 
 def ms_to_display(ms: int):
@@ -58,6 +71,9 @@ class AutoToolApp(ctk.CTk):
         self.current_preset = None
         self.recording_points = False
 
+# всегда тёмная тема
+        ctk.set_appearance_mode("dark")
+
         self._build_ui()
         self._reload_hotkeys()
         self._reload_presets_ui()
@@ -77,7 +93,22 @@ class AutoToolApp(ctk.CTk):
 
     # ====================== UI ======================
     def _build_ui(self):
-        self.tabview = ctk.CTkTabview(self, width=680, height=620)
+        # верхняя панель с шестернёй
+        top_bar = ctk.CTkFrame(self, fg_color="transparent")
+        top_bar.pack(fill="x", padx=20, pady=(10, 0))
+
+        ctk.CTkLabel(top_bar, text="Auto Tool", font=("Arial", 16, "bold")).pack(side="left")
+
+        self.settings_btn = ctk.CTkButton(
+            top_bar, text="⚙", width=40, height=32,
+            command=self._open_settings,
+            fg_color="#3B8ED0", hover_color="#1F6AA5",
+            font=("Arial", 18),
+        )
+        self.settings_btn.pack(side="right")
+        CTkToolTip(self.settings_btn, message="Настройки (хоткеи, тема, обновления)")
+
+        self.tabview = ctk.CTkTabview(self, width=680, height=520)
         self.tabview.pack(padx=20, pady=15)
 
         self.tab_click = self.tabview.add("Клик")
@@ -100,9 +131,12 @@ class AutoToolApp(ctk.CTk):
                                        command=self._toggle_pause,
                                        fg_color="#e67e22", hover_color="#d35400")
         self.pause_btn.pack(side="right", padx=5)
+        CTkToolTip(self.pause_btn, message="Пауза / Продолжить (есть хоткей в настройках)")
 
-        ctk.CTkButton(bottom, text="СТОП ВСЁ", command=self._stop_all,
-                      fg_color="#c0392b", hover_color="#e74c3c").pack(side="right", padx=5)
+        stop_btn = ctk.CTkButton(bottom, text="СТОП ВСЁ", command=self._stop_all,
+                                 fg_color="#c0392b", hover_color="#e74c3c")
+        stop_btn.pack(side="right", padx=5)
+        CTkToolTip(stop_btn, message="Остановить всё (Esc)")
 
     def _make_interval_row(self, parent, default_ms: int = 500):
         """Строка: [значение] [единица]  ± [разброс] [единица]
@@ -190,6 +224,7 @@ class AutoToolApp(ctk.CTk):
         self.click_max = ctk.CTkEntry(f)
         self.click_max.insert(0, "0")
         self.click_max.pack(anchor="w", fill="x")
+        CTkToolTip(self.click_max, message="0 = бесконечно")
 
         ctk.CTkLabel(f, text="Хоткей запуска:").pack(anchor="w", pady=(10, 0))
         self.click_hotkey, _ = self._make_hotkey_row(f, "ctrl+alt+f9")
@@ -227,6 +262,7 @@ class AutoToolApp(ctk.CTk):
         self.keys_max = ctk.CTkEntry(f)
         self.keys_max.insert(0, "0")
         self.keys_max.pack(anchor="w", fill="x")
+        CTkToolTip(self.keys_max, message="0 = бесконечно")
 
         ctk.CTkLabel(f, text="Хоткей запуска:").pack(anchor="w", pady=(10, 0))
         self.keys_hotkey, _ = self._make_hotkey_row(f, "ctrl+alt+f10")
@@ -346,6 +382,11 @@ class AutoToolApp(ctk.CTk):
     def _on_points_finished(self):
         self.after(0, self._hide_overlay_safe)
         self.after(0, lambda: self._status("✓ Прогоны завершены"))
+        if self.tray:
+            try:
+                self.tray.set_active(False)
+            except Exception:
+                pass
 
     # ====================== список точек ======================
     def _refresh_points_list(self):
@@ -442,6 +483,11 @@ class AutoToolApp(ctk.CTk):
         self.clicker.start()
         self.current_preset = "__click__"
         self._update_pause_button()
+        if self.tray:
+            try:
+                self.tray.set_active(True)
+            except Exception:
+                pass
 
     def _toggle_keys(self):
         if self.clicker.running and self.current_preset == "__keys__":
@@ -468,6 +514,11 @@ class AutoToolApp(ctk.CTk):
         self.clicker.start()
         self.current_preset = "__keys__"
         self._update_pause_button()
+        if self.tray:
+            try:
+                self.tray.set_active(True)
+            except Exception:
+                pass
 
     def _toggle_points(self):
         if self.points_clicker.running and self.current_preset == "__points__":
@@ -498,6 +549,11 @@ class AutoToolApp(ctk.CTk):
             self.overlay.show(pts)
         self.current_preset = "__points__"
         self._update_pause_button()
+        if self.tray:
+            try:
+                self.tray.set_active(True)
+            except Exception:
+                pass
 
     def _toggle_pause(self):
         if self.clicker.running:
@@ -532,55 +588,91 @@ class AutoToolApp(ctk.CTk):
             pass
         self.active_hotkeys.clear()
 
-        try:
-            keyboard.add_hotkey(self.exit_hotkey, lambda: self.after(0, self._exit_app))
-        except Exception as e:
-            print("exit hotkey error:", e)
+        s = settings.load()
+        hk = s.get("hotkeys", {})
 
+        exit_hk = hk.get("exit", "f12").strip().lower()
+        pause_hk = hk.get("pause", "").strip().lower()
+        stop_all_hk = hk.get("stop_all", "").strip().lower()
+
+        # обновляем поля на вкладках (синхронизация)
+        self.click_hotkey.delete(0, "end")
+        self.click_hotkey.insert(0, hk.get("click", ""))
+        self.keys_hotkey.delete(0, "end")
+        self.keys_hotkey.insert(0, hk.get("keys", ""))
+        self.points_hotkey.delete(0, "end")
+        self.points_hotkey.insert(0, hk.get("points", ""))
+
+        # выход
+        if exit_hk:
+            try:
+                keyboard.add_hotkey(exit_hk, lambda: self.after(0, self._exit_app))
+            except Exception as e:
+                print("exit hotkey error:", e)
+
+        # стоп всё
+        if stop_all_hk:
+            try:
+                keyboard.add_hotkey(stop_all_hk, lambda: self.after(0, self._stop_all))
+            except Exception as e:
+                print("stop_all hotkey error:", e)
+
+        # пауза
+        if pause_hk:
+            try:
+                keyboard.add_hotkey(pause_hk, lambda: self.after(0, self._toggle_pause))
+            except Exception as e:
+                print("pause hotkey error:", e)
+
+        # esc — всегда стоп (если не занят другим)
         try:
             keyboard.add_hotkey("esc", lambda: self.after(0, self._on_escape_pressed))
-        except Exception as e:
-            print("esc error:", e)
+        except Exception:
+            pass
 
-        for name in presets.list_presets():
-            try:
-                cfg = presets.load_preset(name)
-            except Exception:
-                continue
-            hk = cfg.get("hotkey", "").strip().lower()
-            if not hk or hk in (self.exit_hotkey, "esc"):
-                continue
-            if hk in self.active_hotkeys:
-                continue
-            try:
-                keyboard.add_hotkey(hk, lambda n=name: self.after(0, lambda: self._toggle_preset(n)))
-                self.active_hotkeys[hk] = name
-            except Exception as e:
-                print(f"не смог повесить {hk}: {e}")
-
-        click_hk = self.click_hotkey.get().strip().lower()
-        if click_hk and click_hk not in (self.exit_hotkey, "esc") and click_hk not in self.active_hotkeys:
+        # хоткей клик
+        click_hk = hk.get("click", "").strip().lower()
+        if click_hk:
             try:
                 keyboard.add_hotkey(click_hk, lambda: self.after(0, self._toggle_click))
                 self.active_hotkeys[click_hk] = "__click__"
             except Exception as e:
                 print(f"click hotkey error: {e}")
 
-        keys_hk = self.keys_hotkey.get().strip().lower()
-        if keys_hk and keys_hk not in (self.exit_hotkey, "esc") and keys_hk not in self.active_hotkeys:
+        # хоткей клавиши
+        keys_hk = hk.get("keys", "").strip().lower()
+        if keys_hk:
             try:
                 keyboard.add_hotkey(keys_hk, lambda: self.after(0, self._toggle_keys))
                 self.active_hotkeys[keys_hk] = "__keys__"
             except Exception as e:
                 print(f"keys hotkey error: {e}")
 
-        points_hk = self.points_hotkey.get().strip().lower()
-        if points_hk and points_hk not in (self.exit_hotkey, "esc") and points_hk not in self.active_hotkeys:
+        # хоткей точки
+        points_hk = hk.get("points", "").strip().lower()
+        if points_hk:
             try:
                 keyboard.add_hotkey(points_hk, lambda: self.after(0, self._toggle_points))
                 self.active_hotkeys[points_hk] = "__points__"
             except Exception as e:
                 print(f"points hotkey error: {e}")
+
+        # хоткеи пресетов
+        for name in presets.list_presets():
+            try:
+                cfg = presets.load_preset(name)
+            except Exception:
+                continue
+            phk = cfg.get("hotkey", "").strip().lower()
+            if not phk or phk in (exit_hk, "esc", pause_hk, stop_all_hk):
+                continue
+            if phk in self.active_hotkeys:
+                continue
+            try:
+                keyboard.add_hotkey(phk, lambda n=name: self.after(0, lambda: self._toggle_preset(n)))
+                self.active_hotkeys[phk] = name
+            except Exception as e:
+                print(f"preset hotkey error: {e}")
 
     def _toggle_preset(self, name: str):
         if self.clicker.running or self.points_clicker.running:
@@ -588,6 +680,11 @@ class AutoToolApp(ctk.CTk):
                 self._stop_all()
                 return
         self._start_preset(name)
+        if self.tray:
+            try:
+                self.tray.set_active(True)
+            except Exception:
+                pass
 
     def _start_preset(self, name: str):
         try:
@@ -631,6 +728,29 @@ class AutoToolApp(ctk.CTk):
         except Exception:
             pass
         self._status("Остановлено")
+        if self.tray:
+            try:
+                self.tray.set_active(False)
+            except Exception:
+                pass
+
+    def _open_settings(self):
+        icon_path = _resource_path("icon.ico")
+        # если уже открыто — фокусируемся
+        if hasattr(self, "_settings_window"):
+            try:
+                if self._settings_window.winfo_exists():
+                    self._settings_window.focus()
+                    self._settings_window.lift()
+                    return
+            except Exception:
+                pass
+
+        self._settings_window = SettingsWindow(
+            parent=self,
+            on_hotkeys_change=self._reload_hotkeys,
+            icon_path=icon_path,
+        )
 
     def _on_escape_pressed(self):
         if self.recording_points:
@@ -644,6 +764,11 @@ class AutoToolApp(ctk.CTk):
         self.current_preset = None
         self.after(30, self._hide_overlay_safe)
         self._status("Остановлено (Esc)")
+        if self.tray:
+            try:
+                self.tray.set_active(False)
+            except Exception:
+                pass
 
     def _hide_overlay_safe(self):
         try:
@@ -676,6 +801,12 @@ class AutoToolApp(ctk.CTk):
         self.after(0, self._exit_app)
 
     def _exit_app(self):
+        # закрываем окно настроек если открыто
+        try:
+            if hasattr(self, "_settings_window") and self._settings_window.winfo_exists():
+                self._settings_window.destroy()
+        except Exception:
+            pass
          # останавливаем трей
         try:
             if self.tray:
@@ -892,6 +1023,8 @@ class AutoToolApp(ctk.CTk):
                       command=lambda: self._start_preset(name)).pack(side="right", padx=3, pady=3)
         ctk.CTkButton(row, text="✎", width=40,
                       command=lambda: self._load_to_editor(name, cfg)).pack(side="right", padx=3, pady=3)
+        ctk.CTkButton(row, text="✏", width=40, fg_color="#8e44ad", hover_color="#9b59b6",
+                      command=lambda: self._rename_preset(name)).pack(side="right", padx=3, pady=3)
         ctk.CTkButton(row, text="🗑", width=40, fg_color="#c0392b", hover_color="#e74c3c",
                       command=lambda: self._delete_preset(name)).pack(side="right", padx=3, pady=3)
 
@@ -956,6 +1089,64 @@ class AutoToolApp(ctk.CTk):
             self._stop_all()
         self._reload_hotkeys()
         self._reload_presets_ui()
+
+    def _rename_preset(self, name: str):
+        """Диалог переименования пресета."""
+        dialog = ctk.CTkToplevel(self)
+        dialog.title("Переименовать пресет")
+        dialog.geometry("400x150")
+        dialog.resizable(False, False)
+        dialog.transient(self)
+        dialog.after(50, lambda: dialog.lift())
+        dialog.after(100, lambda: dialog.focus_force())
+
+        # центр относительно главного
+        self.update_idletasks()
+        x = self.winfo_rootx() + (self.winfo_width() - 400) // 2
+        y = self.winfo_rooty() + (self.winfo_height() - 150) // 2
+        dialog.geometry(f"400x150+{x}+{y}")
+
+        ctk.CTkLabel(dialog, text="Новое имя пресета:").pack(anchor="w", padx=15, pady=(15, 5))
+
+        entry = ctk.CTkEntry(dialog, width=360)
+        entry.insert(0, name)
+        entry.pack(padx=15, pady=5)
+        entry.focus_set()
+        entry.select_range(0, "end")
+
+        def do_rename():
+            new_name = entry.get().strip()
+            if not new_name or new_name == name:
+                dialog.destroy()
+                return
+            # проверка существования
+            if new_name in presets.list_presets():
+                self._status(f"Пресет '{new_name}' уже существует!", error=True)
+                return
+            try:
+                cfg = presets.load_preset(name)
+                presets.save_preset(new_name, cfg)
+                presets.delete_preset(name)
+                if self.current_preset == name:
+                    self.current_preset = new_name
+                self._reload_hotkeys()
+                self._reload_presets_ui()
+                self._status(f"Переименован: {name} → {new_name}")
+            except Exception as e:
+                self._status(f"Ошибка: {e}", error=True)
+            dialog.destroy()
+
+        def on_enter(event):
+            do_rename()
+
+        entry.bind("<Return>", on_enter)
+
+        row = ctk.CTkFrame(dialog)
+        row.pack(pady=10)
+        ctk.CTkButton(row, text="Переименовать", command=do_rename,
+                      fg_color="#27ae60", hover_color="#2ecc71").pack(side="left", padx=5)
+        ctk.CTkButton(row, text="Отмена", command=dialog.destroy,
+                      fg_color="#7f8c8d", hover_color="#95a5a6").pack(side="left", padx=5)
 
     def _save_keys_preset(self):
         name = self.keys_preset_name.get().strip()

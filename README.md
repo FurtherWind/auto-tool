@@ -5,7 +5,7 @@
 ![Python](https://img.shields.io/badge/Python-3.10+-3776AB?style=flat&logo=python&logoColor=white)
 ![Platform](https://img.shields.io/badge/Platform-Windows-0078D6?style=flat&logo=windows&logoColor=white)
 ![License](https://img.shields.io/badge/License-MIT-green?style=flat)
-![Version](https://img.shields.io/badge/Version-1.4.0-blue?style=flat)
+![Version](https://img.shields.io/badge/Version-1.4.1-blue?style=flat)
 
 ---
 
@@ -57,13 +57,13 @@
 
 | Клавиша | Действие |
 |---------|----------|
-| `ctrl+alt+f9` | Хоткей вкладки **Клик** — старт/стоп |
-| `ctrl+alt+f10` | Хоткей вкладки **Клавиши** — старт/стоп |
-| `ctrl+alt+f11` | Хоткей вкладки **Точки** — старт/стоп |
-| `ctrl+alt+p` | **Пауза / Продолжить** |
-| `ctrl+alt+s` | **СТОП ВСЁ** |
-| `Esc` | Стоп всего: запись, клики, оверлей |
+| `F6` | Хоткей вкладки **Клик** — старт/стоп |
+| `F7` | Хоткей вкладки **Клавиши** — старт/стоп |
+| `F8` | Хоткей вкладки **Точки** — старт/стоп |
+| `F9` | **Пауза / Продолжить** |
+| `F10` | **СТОП ВСЁ** |
 | `F12` | Выход из программы |
+| `Esc` | Стоп всего: запись, клики, оверлей |
 | Крестик | Свернуть в трей (не выход) |
 
 **Все хоткеи настраиваются** через **⚙️ Настройки** — жмёшь ✎, нажимаешь комбо, готово.

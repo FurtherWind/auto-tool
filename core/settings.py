@@ -15,19 +15,36 @@ SETTINGS_PATH = os.path.join(_base_dir(), "settings.json")
 
 # ---------- настройки по умолчанию ----------
 DEFAULTS = {
-    "theme": "dark",                 # dark | light | system
-    "start_minimized": False,        # запускать свёрнутым в трей
-    "check_updates": True,           # проверять обновления при запуске
+    "theme": "dark",
+    "start_minimized": False,
+    "check_updates": True,
     "hotkeys": {
-        "click":     "ctrl+alt+f9",
-        "keys":      "ctrl+alt+f10",
-        "points":    "ctrl+alt+f11",
-        "pause":     "ctrl+alt+p",
-        "stop_all":  "ctrl+alt+s",
+        "click":     "f6",
+        "keys":      "f7",
+        "points":    "f8",
+        "pause":     "f9",
+        "stop_all":  "f10",
         "exit":      "f12",
     },
 }
 
+OLD_HOTKEYS = {
+    "click":    "ctrl+alt+f9",
+    "keys":     "ctrl+alt+f10",
+    "points":   "ctrl+alt+f11",
+    "pause":    "ctrl+alt+p",
+    "stop_all": "ctrl+alt+s",
+    "exit":     "f12",
+}
+
+NEW_HOTKEYS = {
+    "click":    "f6",
+    "keys":     "f7",
+    "points":   "f8",
+    "pause":    "f9",
+    "stop_all": "f10",
+    "exit":     "f12",
+}
 
 _cache = None
 
@@ -60,6 +77,12 @@ def load() -> dict:
     else:
         _cache = copy.deepcopy(DEFAULTS)
         save(_cache)
+
+    # миграция старых хоткеев на новые дефолты
+    if _cache.get("hotkeys") == OLD_HOTKEYS:
+        _cache["hotkeys"] = dict(NEW_HOTKEYS)
+        save(_cache)
+
     return _cache
 
 

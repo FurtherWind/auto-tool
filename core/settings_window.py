@@ -8,7 +8,7 @@ from core import settings
 from core import presets
 
 
-CURRENT_VERSION = "1.4.0"
+CURRENT_VERSION = "1.4.1"
 GITHUB_REPO = "FurtherWind/auto-tool"
 
 
@@ -42,6 +42,8 @@ class SettingsWindow(ctk.CTkToplevel):
 
         self._build()
         self._load_from_settings()
+
+        self.bind("<FocusOut>", self._on_focus_out)
 
     def _drop_topmost(self):
         try:
@@ -158,7 +160,10 @@ class SettingsWindow(ctk.CTkToplevel):
                 entry.insert(0, combo)
             btn.configure(text="✎", fg_color=("#3B8ED0", "#1F6AA5"))
 
-        hotkey_capture.capture(on_done)
+        def on_cancel():
+            btn.configure(text="✎", fg_color=("#3B8ED0", "#1F6AA5"))
+
+        hotkey_capture.capture(on_done, on_cancel=on_cancel, entry_widget=entry)
 
     # ---------- загрузка / сохранение ----------
     def _load_from_settings(self):
@@ -307,3 +312,20 @@ class SettingsWindow(ctk.CTkToplevel):
                     text="❌ Ошибка скачивания"))
 
         threading.Thread(target=worker, daemon=True).start()
+
+    # ---------- Фокус ----------
+
+    def _on_focus_out(self, event=None):
+        """Если окно теряет фокус — отменяем биндинг."""
+        try:
+            focused = self.focus_get()
+            if focused is not None and str(focused).startswith(str(self)):
+                return
+        except Exception:
+            pass
+
+        from core import hotkey_capture
+        hotkey_capture._cleanup()
+        # сбрасываем все кнопки ✎
+        for key, entry in self._hotkey_widgets.items():
+            pass  # кнопка сбросится сама при следующем вызове
